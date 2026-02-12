@@ -117,23 +117,44 @@ async function getSignedUrl(url) {
   return json.data;
 }
 
-async function fetchFromTikTok(signedData) {
+async function fetchFromTikTok(signedData, refererPath) {
+  const cookieStr = CONFIG.CUSTOM_COOKIE || signedData.cookies;
   const headers = {
     "User-Agent": signedData.navigator.user_agent,
-    Cookie: CONFIG.CUSTOM_COOKIE || signedData.cookies,
-    Accept: "application/json",
-    Referer: "https://www.tiktok.com/",
-    "Accept-Language": "en-GB,en-US;q=0.9,en;q=0.8",
+    Accept: "*/*",
+    "Accept-Language": "en-GB,en-US;q=0.9,en;q=0.8,zh-CN;q=0.7,zh;q=0.6",
+    Referer: refererPath
+      ? `https://www.tiktok.com/${refererPath}`
+      : "https://www.tiktok.com/",
+    "sec-ch-ua":
+      '"Not(A:Brand";v="8", "Chromium";v="144", "Google Chrome";v="144"',
+    "sec-ch-ua-mobile": "?0",
+    "sec-ch-ua-platform": '"macOS"',
+    "sec-fetch-dest": "empty",
+    "sec-fetch-mode": "cors",
+    "sec-fetch-site": "same-origin",
   };
+  if (cookieStr) headers.Cookie = cookieStr;
+
+  console.log(`  [External] Cookie: ${cookieStr ? cookieStr.substring(0, 80) + "..." : "(none)"}`);
 
   const res = await fetch(signedData.signed_url, { headers });
   const text = await res.text();
-  if (!text || text.length === 0) return null;
+
+  console.log(`  [External] HTTP ${res.status}, body length: ${text.length}`);
+  if (!text || text.length === 0) {
+    console.log("  [External] Empty response body");
+    return null;
+  }
 
   try {
-    return JSON.parse(text);
+    const json = JSON.parse(text);
+    return json;
   } catch {
-    console.error("Failed to parse TikTok response:", text.substring(0, 200));
+    console.error(
+      "  [External] Failed to parse response:",
+      text.substring(0, 300),
+    );
     return null;
   }
 }
@@ -145,8 +166,16 @@ async function fetchViaBrowser(url) {
     body: JSON.stringify({ url }),
   });
   const json = await res.json();
+  console.log(`  [Browser] Server responded: status=${json.status}, httpStatus=${json.httpStatus || "N/A"}`);
   if (json.status !== "ok") {
+    console.log(`  [Browser] Error detail: ${JSON.stringify(json).substring(0, 500)}`);
     throw new Error(json.message || "Browser fetch failed");
+  }
+  if (json.data) {
+    console.log(`  [Browser] Data keys: [${Object.keys(json.data).join(", ")}]`);
+    console.log(`  [Browser] Data preview: ${JSON.stringify(json.data).substring(0, 500)}`);
+  } else {
+    console.log("  [Browser] Data is null/undefined");
   }
   return json.data;
 }
@@ -157,7 +186,7 @@ async function fetchViaBrowser(url) {
 
 function buildUserDetailUrl(username) {
   const params = new URLSearchParams({
-    WebIdLastTime: Date.now().toString(),
+    WebIdLastTime: Math.floor(Date.now() / 1000).toString(),
     aid: "1988",
     app_language: "en",
     app_name: "tiktok_web",
@@ -198,7 +227,7 @@ async function resolveSecUid(username) {
   let data;
   try {
     const signedData = await getSignedUrl(url);
-    data = await fetchFromTikTok(signedData);
+    data = await fetchFromTikTok(signedData, `@${username}`);
   } catch (e) {
     console.log("External request failed:", e.message);
     data = null;
@@ -241,9 +270,17 @@ async function resolveSecUid(username) {
 // Post list API
 // ---------------------------------------------------------------------------
 
+function extractCookieValue(name) {
+  if (!CONFIG.CUSTOM_COOKIE) return null;
+  const match = CONFIG.CUSTOM_COOKIE.match(
+    new RegExp(`(?:^|;\\s*)${name}=([^;]+)`),
+  );
+  return match ? match[1] : null;
+}
+
 function buildPostListUrl(secUid, cursor = 0, count = 35) {
   const params = new URLSearchParams({
-    WebIdLastTime: Date.now().toString(),
+    WebIdLastTime: Math.floor(Date.now() / 1000).toString(),
     aid: "1988",
     app_language: "en-GB",
     app_name: "tiktok_web",
@@ -270,39 +307,54 @@ function buildPostListUrl(secUid, cursor = 0, count = 35) {
     priority_region: "US",
     referer: "",
     region: "US",
-    screen_height: "1117",
-    screen_width: "1728",
+    screen_height: "1080",
+    screen_width: "1920",
     secUid: secUid,
     tz_name: "Asia/Shanghai",
+    user_is_login: CONFIG.CUSTOM_COOKIE ? "true" : "false",
     video_encoding: "mp4",
     webcast_language: "en-GB",
   });
 
+  // Add cookie-derived params when available
+  const verifyFp = extractCookieValue("s_v_web_id");
+  if (verifyFp) params.set("verifyFp", verifyFp);
+
+  const odinId = extractCookieValue("odin_tt");
+  if (odinId) params.set("odinId", odinId);
+
+  const msToken = extractCookieValue("msToken");
+  if (msToken) params.set("msToken", msToken);
+
   return `https://www.tiktok.com/api/post/item_list/?${params.toString()}`;
 }
 
-async function fetchPostPage(secUid, cursor = 0, count = 35) {
+async function fetchPostPage(secUid, cursor = 0, count = 35, username) {
   const url = buildPostListUrl(secUid, cursor, count);
+  const referer = username ? `@${username}` : null;
+
+  console.log(`  Raw URL (before signing): ${url.substring(0, 120)}...`);
 
   let data;
 
   // Try /signature + external request
   try {
     const signedData = await getSignedUrl(url);
-    console.log(`  Signed URL: ${signedData.signed_url.substring(0, 120)}...`);
-    data = await fetchFromTikTok(signedData);
+    console.log(`  Signed URL: ${signedData.signed_url.substring(0, 150)}...`);
+    console.log(`  Signature cookies length: ${(signedData.cookies || "").length}`);
+    data = await fetchFromTikTok(signedData, referer);
     if (data) {
-      console.log(
-        `  Response keys: [${Object.keys(data).join(", ")}]`,
-      );
+      console.log(`  Response keys: [${Object.keys(data).join(", ")}]`);
       if (data.statusCode != null) {
-        console.log(`  statusCode: ${data.statusCode}, statusMsg: ${data.statusMsg || ""}`);
+        console.log(
+          `  statusCode: ${data.statusCode}, status_code: ${data.status_code}, statusMsg: "${data.statusMsg || data.status_msg || ""}"`,
+        );
       }
       if (data.itemList) {
         console.log(`  itemList length: ${data.itemList.length}`);
       } else {
-        console.log(`  No itemList in response. Full response preview:`);
-        console.log(`  ${JSON.stringify(data).substring(0, 500)}`);
+        console.log("  No itemList in response. Full response preview:");
+        console.log(`  ${JSON.stringify(data).substring(0, 800)}`);
       }
     } else {
       console.log("  External request returned null/empty");
@@ -318,14 +370,13 @@ async function fetchPostPage(secUid, cursor = 0, count = 35) {
     try {
       data = await fetchViaBrowser(url);
       if (data) {
-        console.log(
-          `  [Fallback] Response keys: [${Object.keys(data).join(", ")}]`,
-        );
+        if (data.statusCode != null || data.status_code != null) {
+          console.log(
+            `  [Fallback] statusCode: ${data.statusCode}, status_code: ${data.status_code}, statusMsg: "${data.statusMsg || data.status_msg || ""}"`,
+          );
+        }
         if (data.itemList) {
           console.log(`  [Fallback] itemList length: ${data.itemList.length}`);
-        } else {
-          console.log(`  [Fallback] No itemList. Response preview:`);
-          console.log(`  ${JSON.stringify(data).substring(0, 500)}`);
         }
       }
     } catch (e) {
@@ -340,7 +391,7 @@ async function fetchPostPage(secUid, cursor = 0, count = 35) {
 // Pagination
 // ---------------------------------------------------------------------------
 
-async function fetchAllPosts(secUid) {
+async function fetchAllPosts(secUid, username) {
   const allItems = [];
   let cursor = 0;
   let hasMore = true;
@@ -353,7 +404,7 @@ async function fetchAllPosts(secUid) {
       `[Page ${page}] Fetching ${CONFIG.COUNT} posts (cursor=${cursor})...`,
     );
 
-    const data = await fetchPostPage(secUid, cursor, CONFIG.COUNT);
+    const data = await fetchPostPage(secUid, cursor, CONFIG.COUNT, username);
 
     if (!data || !data.itemList || data.itemList.length === 0) {
       console.log(`[Page ${page}] No items returned. Stopping.`);
@@ -427,18 +478,30 @@ async function saveToFile(filepath, data) {
 // ---------------------------------------------------------------------------
 
 async function main() {
+  console.log("Config:", {
+    server: CONFIG.SERVER_URL,
+    username: CONFIG.USERNAME,
+    secUid: CONFIG.SEC_UID,
+    count: CONFIG.COUNT,
+    maxPages: CONFIG.MAX_PAGES,
+    hasCookie: !!CONFIG.CUSTOM_COOKIE,
+    cookieLength: CONFIG.CUSTOM_COOKIE ? CONFIG.CUSTOM_COOKIE.length : 0,
+  });
+  console.log("");
+
   let secUid = CONFIG.SEC_UID;
   let userInfo = null;
+  const username = CONFIG.USERNAME;
 
   // Resolve username -> secUid if needed
   if (!secUid) {
-    const resolved = await resolveSecUid(CONFIG.USERNAME);
+    const resolved = await resolveSecUid(username);
     secUid = resolved.secUid;
     userInfo = resolved.userInfo;
   }
 
   // Fetch posts
-  const result = await fetchAllPosts(secUid);
+  const result = await fetchAllPosts(secUid, username);
 
   if (!result.itemList || result.itemList.length === 0) {
     console.log("\nNo posts found for this user.");

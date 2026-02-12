@@ -19,8 +19,8 @@
  *   --count       Videos per page (default: 35)
  *   --pages       Max pages to fetch (default: 1, use 0 for all)
  *   --output      Save results to JSON file
- *   --cookieFile  Path to cookie.json (default: ./cookie.json, browser export format)
- *   --cookie      Custom cookie string (overrides cookieFile)
+ *   --withCookie  Load cookie.json (or specify path: --withCookie=./my.json)
+ *   --cookie      Custom cookie string (takes priority over --withCookie)
  *   --delay       Delay between pages in ms (default: 1500)
  *   --server      Signature server URL (default: http://localhost:8080)
  */
@@ -68,9 +68,13 @@ function loadCookiesFromFile(filepath) {
 function resolveCookie() {
   // Explicit --cookie string takes priority
   if (args.cookie) return args.cookie;
-  // Then try --cookieFile or default cookie.json
-  const file = args.cookieFile || "cookie.json";
-  return loadCookiesFromFile(file);
+  // Only load cookie.json when --withCookie is passed
+  if (args.withCookie) {
+    const file =
+      typeof args.withCookie === "string" ? args.withCookie : "cookie.json";
+    return loadCookiesFromFile(file);
+  }
+  return null;
 }
 
 const CONFIG = {

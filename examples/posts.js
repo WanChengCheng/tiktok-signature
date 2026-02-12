@@ -19,7 +19,8 @@
  *   --count       Videos per page (default: 35)
  *   --pages       Max pages to fetch (default: 1, use 0 for all)
  *   --output      Save results to JSON file
- *   --cookie      Custom cookie string for authenticated requests
+ *   --cookieFile  Path to cookie.json (default: ./cookie.json, browser export format)
+ *   --cookie      Custom cookie string (overrides cookieFile)
  *   --delay       Delay between pages in ms (default: 1500)
  *   --server      Signature server URL (default: http://localhost:8080)
  */
@@ -44,14 +45,42 @@ function parseArgs() {
 
 const args = parseArgs();
 
+// ---------------------------------------------------------------------------
+// Cookie loading: auto-load from cookie.json if present
+// ---------------------------------------------------------------------------
+
+function loadCookiesFromFile(filepath) {
+  try {
+    const { readFileSync } = require("node:fs");
+    const { resolve } = require("node:path");
+    const abs = resolve(filepath);
+    const raw = JSON.parse(readFileSync(abs, "utf-8"));
+    const cookies = raw.cookies || raw;
+    if (!Array.isArray(cookies)) return null;
+    const str = cookies.map((c) => `${c.name}=${c.value}`).join("; ");
+    console.log(`Loaded ${cookies.length} cookies from ${abs}`);
+    return str;
+  } catch {
+    return null;
+  }
+}
+
+function resolveCookie() {
+  // Explicit --cookie string takes priority
+  if (args.cookie) return args.cookie;
+  // Then try --cookieFile or default cookie.json
+  const file = args.cookieFile || "cookie.json";
+  return loadCookiesFromFile(file);
+}
+
 const CONFIG = {
   SERVER_URL: args.server || "http://localhost:8080",
   USERNAME: args.username || args._positional || null,
   SEC_UID: args.secUid || null,
   COUNT: parseInt(args.count) || 35,
-  MAX_PAGES: parseInt(args.pages) ?? 1,
+  MAX_PAGES: args.pages != null ? parseInt(args.pages) : 1,
   OUTPUT_FILE: args.output || null,
-  CUSTOM_COOKIE: args.cookie || null,
+  CUSTOM_COOKIE: resolveCookie(),
   DELAY_MS: parseInt(args.delay) || 1500,
   DEVICE_ID: args.deviceId || "7541351101384803853",
 };

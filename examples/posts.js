@@ -177,8 +177,15 @@ async function resolveSecUid(username) {
     data = await fetchViaBrowser(url);
   }
 
+  if (data) {
+    console.log(`User detail response keys: [${Object.keys(data).join(", ")}]`);
+  }
+
   const user = data?.userInfo?.user;
+  const stats = data?.userInfo?.stats;
   if (!user || !user.secUid) {
+    console.error("Full user detail response:");
+    console.error(JSON.stringify(data, null, 2)?.substring(0, 1000));
     throw new Error(
       `Could not resolve secUid for @${username}. ` +
         "The user may not exist or TikTok blocked the request.",
@@ -186,11 +193,11 @@ async function resolveSecUid(username) {
   }
 
   console.log(`Resolved: @${user.uniqueId} (${user.nickname})`);
-  console.log(`secUid:   ${user.secUid.substring(0, 40)}...`);
+  console.log(`secUid:   ${user.secUid}`);
   console.log(
-    `Stats:    ${user.followerCount?.toLocaleString() || "?"} followers, ` +
-      `${user.heartCount?.toLocaleString() || "?"} likes, ` +
-      `${user.videoCount?.toLocaleString() || "?"} videos`,
+    `Stats:    ${stats?.followerCount?.toLocaleString() || user.followerCount?.toLocaleString() || "?"} followers, ` +
+      `${stats?.heartCount?.toLocaleString() || user.heartCount?.toLocaleString() || "?"} likes, ` +
+      `${stats?.videoCount?.toLocaleString() || user.videoCount?.toLocaleString() || "?"} videos`,
   );
   console.log("");
 
@@ -249,7 +256,24 @@ async function fetchPostPage(secUid, cursor = 0, count = 35) {
   // Try /signature + external request
   try {
     const signedData = await getSignedUrl(url);
+    console.log(`  Signed URL: ${signedData.signed_url.substring(0, 120)}...`);
     data = await fetchFromTikTok(signedData);
+    if (data) {
+      console.log(
+        `  Response keys: [${Object.keys(data).join(", ")}]`,
+      );
+      if (data.statusCode != null) {
+        console.log(`  statusCode: ${data.statusCode}, statusMsg: ${data.statusMsg || ""}`);
+      }
+      if (data.itemList) {
+        console.log(`  itemList length: ${data.itemList.length}`);
+      } else {
+        console.log(`  No itemList in response. Full response preview:`);
+        console.log(`  ${JSON.stringify(data).substring(0, 500)}`);
+      }
+    } else {
+      console.log("  External request returned null/empty");
+    }
   } catch (e) {
     console.log("  External request failed:", e.message);
     data = null;
@@ -258,7 +282,22 @@ async function fetchPostPage(secUid, cursor = 0, count = 35) {
   // Fallback
   if (!data || !data.itemList) {
     console.log("  Falling back to browser fetch...");
-    data = await fetchViaBrowser(url);
+    try {
+      data = await fetchViaBrowser(url);
+      if (data) {
+        console.log(
+          `  [Fallback] Response keys: [${Object.keys(data).join(", ")}]`,
+        );
+        if (data.itemList) {
+          console.log(`  [Fallback] itemList length: ${data.itemList.length}`);
+        } else {
+          console.log(`  [Fallback] No itemList. Response preview:`);
+          console.log(`  ${JSON.stringify(data).substring(0, 500)}`);
+        }
+      }
+    } catch (e) {
+      console.log("  Browser fetch also failed:", e.message);
+    }
   }
 
   return data;
